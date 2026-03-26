@@ -1,16 +1,10 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Stage 1: установка Node.js зависимостей (LiteParse CLI)
-# ─────────────────────────────────────────────────────────────────────────────
-FROM node:20-slim AS node-builder
-
-# Устанавливаем @llamaindex/liteparse глобально.
-# --prefer-offline нет смысла без кэша, --no-audit ускоряет сборку.
-RUN npm install -g @llamaindex/liteparse@1.3.0 --no-audit --no-fund \
-    && lit --version
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Stage 2: финальный образ (Python + Node runtime + приложение)
+# Единый образ: Python 3.12 + Node.js 20 + LiteParse CLI
+#
+# Почему НЕ используем multi-stage copy Node-модулей:
+#   lit использует import.meta.url для разрешения ../cli/parse.js,
+#   поэтому нужна полная структура npm global prefix, а не только bin/lit.
+#   Проще поставить Node.js через nodesource прямо в финальный образ.
 # ─────────────────────────────────────────────────────────────────────────────
 FROM python:3.12-slim
 
@@ -21,23 +15,20 @@ LABEL description="PDF Concept Parser – FastAPI service"
 # Переменные окружения Python
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PYTHONIOENCODING=utf-8 \
-    # Путь к npm global bin (куда liteparse установлен в stage 1)
-    PATH="/usr/local/lib/node_modules/.bin:/usr/local/bin:$PATH"
+    PYTHONIOENCODING=utf-8
 
-# Системные зависимости:
-#   - nodejs  — runtime для LiteParse CLI
-#   - libvips  — требуется sharp (используется liteparse для скриншотов)
-#   - curl    — healthcheck
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        nodejs \
-        libvips42 \
-        curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Копируем node_modules с установленным liteparse из stage 1
-COPY --from=node-builder /usr/local/lib/node_modules /usr/local/lib/node_modules
-COPY --from=node-builder /usr/local/bin/lit           /usr/local/bin/lit
+# Системные зависимости + Node.js 20 через nodesource:
+#   - curl / gnupg  — для подключения nodesource репозитория
+#   - nodejs        — runtime для LiteParse CLI (v20.x)
+#   - libvips42     — требуется sharp (используется liteparse для скриншотов)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs libvips42 \
+    && rm -rf /var/lib/apt/lists/* \
+    # Устанавливаем liteparse глобально — npm сам создаёт правильную структуру
+    && npm install -g @llamaindex/liteparse@1.3.0 --no-audit --no-fund \
+    && lit --version
 
 # Рабочая директория
 WORKDIR /app
@@ -57,7 +48,7 @@ RUN mkdir -p /app/jobs
 EXPOSE 8000
 
 # Healthcheck: проверяем что сервер отвечает
-HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
     CMD curl -f http://localhost:8000/ || exit 1
 
 # Запуск
