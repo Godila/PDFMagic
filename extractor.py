@@ -94,7 +94,7 @@ def _screenshots_via_cli(pdf_path: str, dpi: int = 150, timeout: int = 120,
                 cancel_event=cancel_event,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                shell=True,
+                shell=(os.name == "nt"),
             )
         except (subprocess.TimeoutExpired, InterruptedError):
             print(
@@ -141,7 +141,7 @@ def _text_via_cli(pdf_path: str, timeout: int = 60, cancel_event=None) -> tuple[
             cancel_event=cancel_event,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            shell=True,
+            shell=(os.name == "nt"),
         )
         # Декодируем вручную (encoding нельзя передать в Popen напрямую с shell=True)
         result = subprocess.CompletedProcess(
