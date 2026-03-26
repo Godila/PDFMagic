@@ -15,7 +15,71 @@ import tempfile
 from pathlib import Path
 
 
-def _screenshots_via_cli(pdf_path: str, dpi: int = 150) -> list[str]:
+def _kill_tree(pid: int):
+    """Убивает процесс и всех его потомков (Windows-safe)."""
+    try:
+        import psutil
+        parent = psutil.Process(pid)
+        for child in parent.children(recursive=True):
+            try:
+                child.kill()
+            except psutil.NoSuchProcess:
+                pass
+        parent.kill()
+    except Exception:
+        pass
+
+
+def _run_with_kill_tree(cmd: list, timeout: int, cancel_event=None,
+                        **popen_kwargs) -> subprocess.CompletedProcess:
+    """
+    Запускает subprocess с жёстким таймаутом и убийством всего дерева процессов.
+
+    На Windows shell=True создаёт cmd.exe → node.exe цепочку.
+    Стандартный subprocess.run(timeout=) убивает только cmd.exe, node.exe
+    продолжает висеть. psutil.kill() убивает всё дерево.
+
+    Использует communicate() в отдельном потоке чтобы избежать deadlock при
+    большом stdout (PIPE буфер переполняется при poll-подходе).
+    """
+    import time as _time
+    import threading as _threading
+
+    proc = subprocess.Popen(cmd, **popen_kwargs)
+    result_holder: list = [None, None]  # [stdout, stderr]
+
+    def _communicate():
+        try:
+            result_holder[0], result_holder[1] = proc.communicate()
+        except Exception:
+            pass
+
+    comm_thread = _threading.Thread(target=_communicate, daemon=True)
+    comm_thread.start()
+
+    deadline = _time.monotonic() + timeout
+    poll_interval = 0.3
+
+    while comm_thread.is_alive():
+        if cancel_event and cancel_event.is_set():
+            _kill_tree(proc.pid)
+            comm_thread.join(timeout=2)
+            raise InterruptedError("Обработка отменена пользователем")
+
+        if _time.monotonic() > deadline:
+            _kill_tree(proc.pid)
+            comm_thread.join(timeout=2)
+            raise subprocess.TimeoutExpired(cmd, timeout)
+
+        _time.sleep(poll_interval)
+
+    return subprocess.CompletedProcess(
+        cmd, proc.returncode, result_holder[0], result_holder[1]
+    )
+
+
+def _screenshots_via_cli(pdf_path: str, dpi: int = 150, timeout: int = 120,
+                         cancel_event=None) -> list[str]:
     """
     Генерирует скриншоты каждой страницы PDF через `lit screenshot` CLI.
     Возвращает список base64-строк (PNG), отсортированных по номеру страницы.
@@ -23,12 +87,22 @@ def _screenshots_via_cli(pdf_path: str, dpi: int = 150) -> list[str]:
     lit_cmd = _find_lit_command()
     out_dir = tempfile.mkdtemp(prefix="liteparse_screenshots_")
     try:
-        result = subprocess.run(
-            [lit_cmd, "screenshot", pdf_path, "-o", out_dir, "--dpi", str(dpi)],
-            capture_output=True,
-            text=True,
-            shell=True,
-        )
+        try:
+            result = _run_with_kill_tree(
+                [lit_cmd, "screenshot", pdf_path, "-o", out_dir, "--dpi", str(dpi)],
+                timeout=timeout,
+                cancel_event=cancel_event,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                shell=True,
+            )
+        except (subprocess.TimeoutExpired, InterruptedError):
+            print(
+                f"[extractor] WARN: lit screenshot завис (>{timeout}с), возвращаем пустой список.",
+                file=sys.stderr,
+            )
+            return []
+
         if result.returncode != 0:
             print(
                 f"[extractor] WARN: lit screenshot завершился с кодом {result.returncode}",
@@ -51,19 +125,40 @@ def _screenshots_via_cli(pdf_path: str, dpi: int = 150) -> list[str]:
         shutil.rmtree(out_dir, ignore_errors=True)
 
 
-def _text_via_cli(pdf_path: str) -> tuple[str, list[str]]:
+def _text_via_cli(pdf_path: str, timeout: int = 60, cancel_event=None) -> tuple[str, list[str]]:
     """
     Извлекает текст через `lit parse` CLI (JSON-режим).
     Возвращает (полный_текст, [текст_страницы_1, ...]).
+    При зависании (timeout) возвращает пустой текст — pipeline продолжит
+    работу только на скриншотах.
     """
     lit_cmd = _find_lit_command()
-    result = subprocess.run(
-        [lit_cmd, "parse", pdf_path, "--format", "json"],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        shell=True,
-    )
+
+    try:
+        result = _run_with_kill_tree(
+            [lit_cmd, "parse", pdf_path, "--format", "json"],
+            timeout=timeout,
+            cancel_event=cancel_event,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            shell=True,
+        )
+        # Декодируем вручную (encoding нельзя передать в Popen напрямую с shell=True)
+        result = subprocess.CompletedProcess(
+            result.args, result.returncode,
+            result.stdout.decode("utf-8", errors="replace") if result.stdout else "",
+            result.stderr.decode("utf-8", errors="replace") if result.stderr else "",
+        )
+    except InterruptedError:
+        raise  # пробрасываем отмену выше
+    except subprocess.TimeoutExpired:
+        print(
+            f"[extractor] WARN: lit parse завис (>{timeout}с), пропускаем текст — "
+            f"анализ продолжится только по скриншотам.",
+            file=sys.stderr,
+        )
+        return "", []
+
     if result.returncode != 0:
         print(
             f"[extractor] WARN: lit parse завершился с кодом {result.returncode}",
@@ -128,7 +223,8 @@ def _page_sort_key(filename: str) -> int:
     return int(nums[-1]) if nums else 0
 
 
-def extract_pdf(pdf_path: str, dpi: int = 150, max_images: int = 40) -> dict:
+def extract_pdf(pdf_path: str, dpi: int = 150, max_images: int = 40,
+                cancel_event=None) -> dict:
     """
     Основная функция извлечения данных из PDF.
 
@@ -150,10 +246,16 @@ def extract_pdf(pdf_path: str, dpi: int = 150, max_images: int = 40) -> dict:
     if not os.path.exists(pdf_path):
         raise FileNotFoundError(f"PDF не найден: {pdf_path}")
 
+    def _check_cancel():
+        if cancel_event and cancel_event.is_set():
+            raise InterruptedError("Обработка отменена пользователем")
+
     print(f"[extractor] Извлекаем текст из {Path(pdf_path).name} ...")
     full_text, pages_text = _text_via_cli(pdf_path)
     page_count = len(pages_text)
     print(f"[extractor] Получено {page_count} страниц текста.")
+
+    _check_cancel()  # точка отмены между text и screenshots
 
     print(f"[extractor] Генерируем скриншоты (DPI={dpi}) ...")
     images_b64 = _screenshots_via_cli(pdf_path, dpi=dpi)

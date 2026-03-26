@@ -56,6 +56,10 @@ _ws_queues: dict[str, asyncio.Queue] = {}
 # Хранилище активных asyncio-задач (для отмены)
 _running_tasks: dict[str, asyncio.Task] = {}
 
+# threading.Event per job — сигнал отмены для блокирующих потоков (subprocess / LLM)
+import threading
+_cancel_events: dict[str, threading.Event] = {}
+
 # ---------------------------------------------------------------------------
 # Хелперы
 # ---------------------------------------------------------------------------
@@ -142,8 +146,12 @@ async def start_process(job_id: str, req: ProcessRequest = Body(default=ProcessR
     if job_id not in _ws_queues:
         _ws_queues[job_id] = asyncio.Queue()
 
+    # Создаём Event для отмены блокирующих потоков
+    cancel_event = threading.Event()
+    _cancel_events[job_id] = cancel_event
+
     # Запускаем фоновую задачу и сохраняем ссылку для отмены
-    task = asyncio.create_task(_run_pipeline(job_id))
+    task = asyncio.create_task(_run_pipeline(job_id, cancel_event))
     _running_tasks[job_id] = task
     return {"status": "started"}
 
@@ -156,6 +164,11 @@ async def cancel_process(job_id: str):
         return JSONResponse({"error": "job not found"}, status_code=404)
     if status.get("state") != "running":
         return JSONResponse({"error": "job is not running"}, status_code=400)
+
+    # Сигнализируем блокирующим потокам (subprocess, LLM) через Event
+    ev = _cancel_events.get(job_id)
+    if ev:
+        ev.set()
 
     task = _running_tasks.get(job_id)
     if task and not task.done():
@@ -228,7 +241,7 @@ async def download_result(job_id: str):
 # Фоновый пайплайн
 # ---------------------------------------------------------------------------
 
-async def _run_pipeline(job_id: str):
+async def _run_pipeline(job_id: str, cancel_event: threading.Event = None):
     """Выполняет полный пайплайн парсинга в фоне с отправкой прогресса."""
     d = _job_dir(job_id)
     pdf_path = str(d / "input.pdf")
@@ -267,7 +280,7 @@ async def _run_pipeline(job_id: str):
         from extractor import extract_pdf
         pdf_data = await asyncio.get_event_loop().run_in_executor(
             None,
-            lambda: extract_pdf(pdf_path, dpi=150, max_images=40)
+            lambda: extract_pdf(pdf_path, dpi=150, max_images=40, cancel_event=cancel_event)
         )
         await log(
             f"✅ PDF обработан: {pdf_data['page_count']} страниц, "
@@ -291,6 +304,7 @@ async def _run_pipeline(job_id: str):
                 api_key=api_key,
                 model=model,
                 batch_size=20,
+                cancel_event=cancel_event,
             )
         )
         found = sum(1 for v in extracted.values() if v is not None)
@@ -342,7 +356,7 @@ async def _run_pipeline(job_id: str):
         await log(f"🎉 Готово! Найдено {found}/{len(parameters)} параметров за {elapsed:.0f} сек.", progress=100)
         await _push(job_id, {"type": "done", "data": status})
 
-    except asyncio.CancelledError:
+    except (asyncio.CancelledError, InterruptedError):
         status = _job_status(job_id)
         status.update({"state": "cancelled", "progress": 0})
         _save_status(job_id, status)
@@ -357,8 +371,9 @@ async def _run_pipeline(job_id: str):
         await _push(job_id, {"type": "error", "message": error_msg, "traceback": tb})
 
     finally:
-        # Всегда убираем задачу из реестра после завершения/отмены/ошибки
+        # Всегда убираем задачу и event из реестра после завершения/отмены/ошибки
         _running_tasks.pop(job_id, None)
+        _cancel_events.pop(job_id, None)
 
 
 # ---------------------------------------------------------------------------
