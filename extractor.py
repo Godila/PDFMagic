@@ -180,17 +180,34 @@ def _text_via_cli(pdf_path: str, timeout: int = 60, cancel_event=None) -> tuple[
 
 
 def _find_lit_command() -> str:
-    """Ищет исполняемый файл `lit` (liteparse CLI) в PATH."""
-    # Явный путь npm global bin (Windows)
-    npm_lit = os.path.expandvars(r"%APPDATA%\npm\lit.cmd")
-    if os.path.exists(npm_lit):
-        return npm_lit
-    for candidate in ("lit", "lit.cmd", "lit.ps1"):
-        if shutil.which(candidate):
-            return candidate
+    """Ищет исполняемый файл `lit` (liteparse CLI) в PATH.
+
+    Поддерживает Windows (lit.cmd) и Linux/Docker (/usr/local/bin/lit).
+    Также учитывает переменную окружения LIT_CMD для явного указания пути.
+    """
+    # Явное переопределение через env (удобно для Docker/CI)
+    env_override = os.environ.get("LIT_CMD")
+    if env_override and os.path.exists(env_override):
+        return env_override
+
+    # Windows: npm global bin
+    if os.name == "nt":
+        npm_lit = os.path.expandvars(r"%APPDATA%\npm\lit.cmd")
+        if os.path.exists(npm_lit):
+            return npm_lit
+        for candidate in ("lit.cmd", "lit.ps1", "lit"):
+            if shutil.which(candidate):
+                return candidate
+    else:
+        # Linux/macOS: стандартные места npm global bin
+        for candidate in ("lit", "/usr/local/bin/lit", "/usr/bin/lit"):
+            if shutil.which(candidate) or os.path.exists(candidate):
+                return candidate
+
     raise RuntimeError(
         "Команда `lit` не найдена. Установите liteparse:\n"
-        "  npm install -g @llamaindex/liteparse"
+        "  npm install -g @llamaindex/liteparse\n"
+        "Или задайте путь явно через переменную окружения LIT_CMD."
     )
 
 

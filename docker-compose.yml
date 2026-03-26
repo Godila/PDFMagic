@@ -1,0 +1,43 @@
+services:
+  pdf-parser:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    # Имя контейнера (удобно для dokploy логов)
+    container_name: pdf-parser
+
+    # Переменные окружения — читаются из .env рядом с compose-файлом.
+    # В Dokploy их можно задать через UI (Environment Variables).
+    env_file:
+      - .env
+
+    ports:
+      - "8000:8000"
+
+    volumes:
+      # Персистентное хранилище для временных файлов заданий.
+      # При рестарте контейнера незавершённые задания не теряются.
+      - pdf_parser_jobs:/app/jobs
+
+    restart: unless-stopped
+
+    # Ресурсные лимиты — адаптируй под свой сервер.
+    # LiteParse + Vision LLM требуют памяти при параллельных запросах.
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+        reservations:
+          memory: 256m
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  pdf_parser_jobs:
+    driver: local

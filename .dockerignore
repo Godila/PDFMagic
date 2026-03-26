@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+*.egg-info/
+
+# Данные — не включаем в образ (монтируются как volume или передаются через UI)
+jobs/
+*.pdf
+*.xlsx
+*_output_*.xlsx
+
+# Dev/debug файлы
+compare*.py
+debug_*.py
+server.log
+server_err.log
+*.traineddata
+
+# Git
+.git/
+.gitignore
+
+# Env с секретами (задаётся через Dokploy UI или env_file на сервере)
+.env
+
+# Документация и конфиги разработки
+TECHNICAL_OVERVIEW.md
