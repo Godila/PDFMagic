@@ -1,0 +1,1017 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PDF Concept Parser</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Onest:wght@300;400;500;600;700&family=Bebas+Neue&display=swap" rel="stylesheet">
+<style>
+/* ================================================================
+   DESIGN SYSTEM — Industrial Precision
+   Palette: Near-black base, warm white content, copper accent
+================================================================ */
+:root {
+  --bg:         #0e0f11;
+  --surface:    #16181c;
+  --surface2:   #1e2026;
+  --border:     #2a2d34;
+  --border2:    #363a44;
+  --text:       #e8e9ec;
+  --text-muted: #7a7f8e;
+  --text-dim:   #4a4f5c;
+  --accent:     #c8783a;
+  --accent-h:   #d98a4c;
+  --accent-glow:rgba(200,120,58,.18);
+  --green:      #4caf7d;
+  --green-bg:   rgba(76,175,125,.12);
+  --red:        #e05555;
+  --red-bg:     rgba(224,85,85,.12);
+  --yellow:     #d4a843;
+  --yellow-bg:  rgba(212,168,67,.12);
+  --radius:     10px;
+  --radius-lg:  16px;
+  --shadow:     0 4px 24px rgba(0,0,0,.5);
+  --shadow-lg:  0 8px 48px rgba(0,0,0,.7);
+  --transition: .2s cubic-bezier(.4,0,.2,1);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { font-size: 14px; -webkit-font-smoothing: antialiased; }
+
+body {
+  font-family: 'Onest', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow-x: hidden;
+}
+
+/* ── Noise texture overlay ── */
+body::before {
+  content: '';
+  position: fixed; inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+  pointer-events: none; z-index: 9999; opacity: .4;
+}
+
+/* ── Header ── */
+.header {
+  display: flex; align-items: center; gap: 16px;
+  padding: 20px 32px; border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  position: sticky; top: 0; z-index: 100;
+}
+.logo {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 22px; letter-spacing: .1em;
+  color: var(--accent);
+  line-height: 1;
+}
+.logo span { color: var(--text); }
+.header-sub {
+  font-size: 11px; color: var(--text-muted);
+  border-left: 1px solid var(--border2); padding-left: 16px;
+  line-height: 1.4;
+}
+.header-model {
+  margin-left: auto;
+  font-size: 11px; color: var(--text-dim);
+  display: flex; align-items: center; gap: 6px;
+}
+.dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green);
+  animation: pulse 2s infinite;
+}
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+/* ── Layout ── */
+.layout {
+  display: grid;
+  grid-template-columns: 380px 1fr;
+  flex: 1;
+  height: calc(100vh - 61px);
+  overflow: hidden;
+}
+
+/* ── Sidebar ── */
+.sidebar {
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  display: flex; flex-direction: column;
+}
+.sidebar::-webkit-scrollbar { width: 4px; }
+.sidebar::-webkit-scrollbar-track { background: transparent; }
+.sidebar::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+.section {
+  padding: 24px;
+  border-bottom: 1px solid var(--border);
+}
+.section-title {
+  font-size: 10px; font-weight: 600;
+  letter-spacing: .12em; text-transform: uppercase;
+  color: var(--text-muted); margin-bottom: 16px;
+  display: flex; align-items: center; gap: 8px;
+}
+.section-title::before {
+  content: ''; display: block;
+  width: 3px; height: 12px;
+  background: var(--accent); border-radius: 2px;
+}
+
+/* ── Drop Zone ── */
+.drop-zone {
+  border: 1.5px dashed var(--border2);
+  border-radius: var(--radius);
+  padding: 20px;
+  text-align: center;
+  cursor: pointer;
+  transition: var(--transition);
+  position: relative;
+  overflow: hidden;
+}
+.drop-zone:hover,
+.drop-zone.drag-over {
+  border-color: var(--accent);
+  background: var(--accent-glow);
+}
+.drop-zone input[type=file] {
+  position: absolute; inset: 0;
+  opacity: 0; cursor: pointer;
+  width: 100%; height: 100%;
+}
+.drop-icon {
+  font-size: 28px; margin-bottom: 8px;
+  display: block; line-height: 1;
+}
+.drop-label {
+  font-size: 12px; font-weight: 500;
+  color: var(--text); margin-bottom: 4px;
+}
+.drop-hint {
+  font-size: 11px; color: var(--text-muted);
+}
+.file-badge {
+  display: none;
+  align-items: center; gap: 8px;
+  background: var(--surface2); border-radius: 8px;
+  padding: 10px 12px; margin-top: 10px;
+  font-size: 12px; text-align: left;
+}
+.file-badge.visible { display: flex; }
+.file-badge-icon { font-size: 18px; }
+.file-badge-name { font-weight: 500; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.file-badge-size { font-size: 11px; color: var(--text-muted); }
+.file-badge-remove {
+  cursor: pointer; color: var(--text-dim);
+  font-size: 16px; line-height: 1;
+  transition: var(--transition);
+}
+.file-badge-remove:hover { color: var(--red); }
+
+/* ── Advanced / Prompt editor ── */
+.advanced-toggle {
+  display: flex; align-items: center; justify-content: space-between;
+  cursor: pointer; padding: 14px 24px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px; font-weight: 600;
+  letter-spacing: .08em; text-transform: uppercase;
+  color: var(--text-muted);
+  transition: var(--transition);
+  user-select: none;
+}
+.advanced-toggle:hover { color: var(--text); background: var(--surface2); }
+.toggle-arrow {
+  transition: transform .25s;
+  font-size: 10px;
+}
+.toggle-arrow.open { transform: rotate(180deg); }
+
+.advanced-body {
+  padding: 0 24px;
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height .35s cubic-bezier(.4,0,.2,1), padding .35s;
+}
+.advanced-body.open {
+  max-height: 600px;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border);
+}
+.prompt-textarea {
+  width: 100%;
+  min-height: 260px;
+  background: var(--bg);
+  border: 1.5px solid var(--border2);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: 'Onest', monospace;
+  font-size: 11px; line-height: 1.65;
+  padding: 14px;
+  resize: vertical;
+  transition: border-color var(--transition);
+  outline: none;
+}
+.prompt-textarea:focus { border-color: var(--accent); }
+.prompt-hint {
+  margin-top: 8px;
+  font-size: 10px; color: var(--text-dim); line-height: 1.5;
+}
+.btn-reset-prompt {
+  margin-top: 10px;
+  background: none; border: 1px solid var(--border2);
+  color: var(--text-muted); border-radius: 6px;
+  padding: 5px 12px; font-size: 11px; cursor: pointer;
+  font-family: inherit; transition: var(--transition);
+}
+.btn-reset-prompt:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ── Run Button ── */
+.sidebar-footer { padding: 20px 24px; margin-top: auto; }
+
+.btn-run {
+  width: 100%; padding: 14px;
+  background: var(--accent);
+  color: #fff; border: none;
+  border-radius: var(--radius); cursor: pointer;
+  font-family: 'Onest', sans-serif;
+  font-size: 13px; font-weight: 600;
+  letter-spacing: .04em;
+  transition: var(--transition);
+  position: relative; overflow: hidden;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+}
+.btn-run::before {
+  content: '';
+  position: absolute; inset: 0;
+  background: linear-gradient(135deg, rgba(255,255,255,.08) 0%, transparent 60%);
+}
+.btn-run:hover:not(:disabled) { background: var(--accent-h); transform: translateY(-1px); box-shadow: 0 6px 20px rgba(200,120,58,.35); }
+.btn-run:active:not(:disabled) { transform: translateY(0); }
+.btn-run:disabled { opacity: .45; cursor: not-allowed; }
+
+/* ── Main Content ── */
+.main {
+  display: flex; flex-direction: column;
+  overflow: hidden; background: var(--bg);
+}
+
+/* ── Welcome / Empty state ── */
+.empty-state {
+  flex: 1; display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  padding: 48px; text-align: center;
+  opacity: 1; transition: opacity .4s;
+}
+.empty-state.hidden { display: none; }
+.empty-icon { font-size: 64px; margin-bottom: 20px; opacity: .3; }
+.empty-title { font-size: 22px; font-weight: 600; color: var(--text-muted); margin-bottom: 8px; }
+.empty-desc { font-size: 13px; color: var(--text-dim); max-width: 320px; line-height: 1.6; }
+
+/* ── Processing Panel ── */
+.processing-panel {
+  display: none; flex-direction: column;
+  padding: 32px; flex: 1;
+}
+.processing-panel.visible { display: flex; }
+
+.process-header {
+  display: flex; align-items: flex-start;
+  justify-content: space-between; margin-bottom: 28px;
+}
+.process-title { font-size: 18px; font-weight: 600; }
+.process-meta { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+
+/* ── Progress ── */
+.progress-block { margin-bottom: 28px; }
+.progress-header {
+  display: flex; justify-content: space-between;
+  align-items: center; margin-bottom: 10px;
+}
+.progress-label { font-size: 12px; font-weight: 600; color: var(--text-muted); letter-spacing: .06em; text-transform: uppercase; }
+.progress-pct { font-family: 'Bebas Neue', sans-serif; font-size: 22px; color: var(--accent); letter-spacing: .05em; }
+.progress-track {
+  height: 4px; background: var(--surface2);
+  border-radius: 2px; overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent) 0%, var(--accent-h) 100%);
+  border-radius: 2px;
+  transition: width .5s cubic-bezier(.4,0,.2,1);
+  position: relative;
+  width: 0;
+}
+.progress-fill::after {
+  content: '';
+  position: absolute; right: 0; top: 0; bottom: 0; width: 40px;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.25));
+  animation: shimmer 1.2s infinite;
+}
+@keyframes shimmer { 0%{ opacity:0 } 50%{ opacity:1 } 100%{ opacity:0 } }
+
+/* ── Log ── */
+.log-block {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px;
+  max-height: 200px; overflow-y: auto;
+  font-size: 12px; line-height: 1.8;
+  flex-shrink: 0;
+}
+.log-block::-webkit-scrollbar { width: 4px; }
+.log-block::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+.log-entry { color: var(--text-muted); }
+.log-entry.new { color: var(--text); animation: fadeIn .3s; }
+@keyframes fadeIn { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:none} }
+
+/* ── Results ── */
+.results-panel {
+  display: none; flex-direction: column;
+  flex: 1; overflow: hidden;
+}
+.results-panel.visible { display: flex; }
+
+.results-header {
+  padding: 20px 32px;
+  display: flex; align-items: center; gap: 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.results-title { font-size: 16px; font-weight: 600; flex: 1; }
+
+.stat-pill {
+  display: flex; align-items: center; gap: 6px;
+  background: var(--surface2); border: 1px solid var(--border2);
+  border-radius: 20px; padding: 5px 12px;
+  font-size: 12px; font-weight: 500;
+}
+.stat-pill .num { font-family: 'Bebas Neue', sans-serif; font-size: 16px; }
+.stat-pill.good .num { color: var(--green); }
+.stat-pill.warn .num { color: var(--yellow); }
+
+.btn-download {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--green); color: #fff; border: none;
+  border-radius: var(--radius); padding: 10px 20px;
+  font-family: 'Onest', sans-serif;
+  font-size: 12px; font-weight: 600;
+  cursor: pointer; transition: var(--transition);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.btn-download:hover { filter: brightness(1.12); transform: translateY(-1px); }
+
+.btn-new {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--surface2); color: var(--text-muted); border: 1px solid var(--border2);
+  border-radius: var(--radius); padding: 10px 16px;
+  font-family: 'Onest', sans-serif; font-size: 12px; font-weight: 500;
+  cursor: pointer; transition: var(--transition);
+}
+.btn-new:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ── Results filter bar ── */
+.filter-bar {
+  padding: 12px 32px;
+  display: flex; align-items: center; gap: 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.search-input {
+  background: var(--surface2); border: 1px solid var(--border2);
+  border-radius: 8px; padding: 7px 12px;
+  color: var(--text); font-family: 'Onest', sans-serif; font-size: 12px;
+  outline: none; transition: border-color var(--transition);
+  min-width: 200px;
+}
+.search-input:focus { border-color: var(--accent); }
+.filter-btns { display: flex; gap: 6px; }
+.filter-btn {
+  background: none; border: 1px solid var(--border2);
+  border-radius: 6px; padding: 5px 12px;
+  color: var(--text-muted); font-size: 11px; font-weight: 500;
+  cursor: pointer; font-family: inherit; transition: var(--transition);
+  letter-spacing: .03em;
+}
+.filter-btn:hover { border-color: var(--text-dim); color: var(--text); }
+.filter-btn.active { border-color: var(--accent); color: var(--accent); background: var(--accent-glow); }
+.results-count { margin-left: auto; font-size: 11px; color: var(--text-dim); }
+
+/* ── Table ── */
+.table-wrap { flex: 1; overflow-y: auto; }
+.table-wrap::-webkit-scrollbar { width: 6px; }
+.table-wrap::-webkit-scrollbar-track { background: var(--bg); }
+.table-wrap::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+
+table {
+  width: 100%; border-collapse: collapse;
+  font-size: 12.5px;
+}
+thead th {
+  position: sticky; top: 0; z-index: 10;
+  background: var(--surface);
+  padding: 10px 16px;
+  text-align: left; font-size: 10px; font-weight: 600;
+  letter-spacing: .1em; text-transform: uppercase;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+thead th:first-child { padding-left: 32px; }
+thead th:last-child { padding-right: 32px; }
+
+tbody tr {
+  border-bottom: 1px solid var(--border);
+  transition: background var(--transition);
+}
+tbody tr:hover { background: var(--surface); }
+tbody tr.row-found:hover { background: rgba(76,175,125,.05); }
+tbody tr.row-empty:hover { background: rgba(224,85,85,.04); }
+
+tbody td {
+  padding: 11px 16px; vertical-align: top;
+  line-height: 1.5;
+}
+tbody td:first-child { padding-left: 32px; }
+tbody td:last-child { padding-right: 32px; }
+
+.cell-num { color: var(--text-dim); font-size: 11px; }
+.cell-name { font-weight: 500; color: var(--text); }
+.cell-type { color: var(--text-muted); font-size: 11px; }
+.cell-units { color: var(--text-dim); font-size: 11px; }
+.cell-value { font-weight: 600; }
+.cell-value.has-value { color: var(--text); }
+.cell-value.no-value { color: var(--text-dim); font-weight: 400; font-style: italic; }
+
+.value-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.status-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; margin-top: 2px;
+}
+.status-dot.found { background: var(--green); box-shadow: 0 0 5px rgba(76,175,125,.5); }
+.status-dot.empty { background: var(--border2); }
+
+/* ── Toast ── */
+.toast {
+  position: fixed; bottom: 24px; right: 24px; z-index: 9000;
+  background: var(--surface); border: 1px solid var(--border2);
+  border-radius: var(--radius); padding: 12px 18px;
+  font-size: 13px; color: var(--text);
+  box-shadow: var(--shadow-lg);
+  transform: translateY(80px); opacity: 0;
+  transition: all .35s cubic-bezier(.4,0,.2,1);
+  display: flex; align-items: center; gap: 10px;
+  max-width: 340px;
+}
+.toast.show { transform: translateY(0); opacity: 1; }
+.toast.error { border-color: var(--red); }
+.toast.success { border-color: var(--green); }
+
+/* ── Scrollbar global ── */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+
+/* ── Animations ── */
+@keyframes spin { to { transform: rotate(360deg); } }
+.spinner {
+  width: 16px; height: 16px;
+  border: 2px solid rgba(255,255,255,.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+  flex-shrink: 0;
+}
+</style>
+</head>
+<body>
+
+<!-- ── Header ── -->
+<header class="header">
+  <div class="logo">PDF<span>Parser</span></div>
+  <div class="header-sub">
+    Автоматическое извлечение параметров<br>концепций застройки
+  </div>
+  <div class="header-model">
+    <span class="dot"></span>
+    <span id="modelName">AI готов</span>
+  </div>
+</header>
+
+<!-- ── Layout ── -->
+<div class="layout">
+
+  <!-- ═══════ SIDEBAR ═══════ -->
+  <aside class="sidebar">
+
+    <!-- PDF Upload -->
+    <div class="section">
+      <div class="section-title">Презентация объекта</div>
+      <div class="drop-zone" id="pdfZone">
+        <input type="file" id="pdfInput" accept=".pdf">
+        <span class="drop-icon">📄</span>
+        <div class="drop-label">Перетащите PDF или нажмите</div>
+        <div class="drop-hint">Концепция застройки в формате .pdf</div>
+      </div>
+      <div class="file-badge" id="pdfBadge">
+        <span class="file-badge-icon">📋</span>
+        <span class="file-badge-name" id="pdfBadgeName"></span>
+        <span class="file-badge-size" id="pdfBadgeSize"></span>
+        <span class="file-badge-remove" id="pdfRemove" title="Удалить">×</span>
+      </div>
+    </div>
+
+    <!-- XLSX Upload -->
+    <div class="section">
+      <div class="section-title">Шаблон параметров</div>
+      <div class="drop-zone" id="xlsxZone">
+        <input type="file" id="xlsxInput" accept=".xlsx,.xls">
+        <span class="drop-icon">📊</span>
+        <div class="drop-label">Перетащите XLSX или нажмите</div>
+        <div class="drop-hint">Файл с листом «Список параметров»</div>
+      </div>
+      <div class="file-badge" id="xlsxBadge">
+        <span class="file-badge-icon">📈</span>
+        <span class="file-badge-name" id="xlsxBadgeName"></span>
+        <span class="file-badge-size" id="xlsxBadgeSize"></span>
+        <span class="file-badge-remove" id="xlsxRemove" title="Удалить">×</span>
+      </div>
+    </div>
+
+    <!-- Advanced: Prompt editor -->
+    <div class="advanced-toggle" id="advancedToggle">
+      <span>⚙ Настройки промпта</span>
+      <span class="toggle-arrow" id="toggleArrow">▼</span>
+    </div>
+    <div class="advanced-body" id="advancedBody">
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;line-height:1.5">
+        Системный промпт для AI. Изменения применяются к следующему запуску.
+      </div>
+      <textarea class="prompt-textarea" id="promptTextarea" spellcheck="false" placeholder="Загрузка промпта..."></textarea>
+      <div class="prompt-hint">
+        Используйте <code style="color:var(--accent)">{params_text}</code> — будет заменено списком параметров
+      </div>
+      <button class="btn-reset-prompt" id="btnResetPrompt">↺ Сбросить к исходному</button>
+    </div>
+
+    <!-- Run button -->
+    <div class="sidebar-footer">
+      <button class="btn-run" id="btnRun" disabled>
+        <span id="btnRunIcon">▶</span>
+        <span id="btnRunLabel">Загрузите файлы</span>
+      </button>
+    </div>
+
+  </aside>
+
+  <!-- ═══════ MAIN ═══════ -->
+  <main class="main">
+
+    <!-- Empty state -->
+    <div class="empty-state" id="emptyState">
+      <div class="empty-icon">🏗</div>
+      <div class="empty-title">Готов к анализу</div>
+      <div class="empty-desc">Загрузите PDF-презентацию и XLSX-шаблон&nbsp;— AI автоматически извлечёт параметры концепции</div>
+    </div>
+
+    <!-- Processing panel -->
+    <div class="processing-panel" id="processingPanel">
+      <div class="process-header">
+        <div>
+          <div class="process-title">Анализ документа</div>
+          <div class="process-meta" id="processMetaText">Инициализация...</div>
+        </div>
+      </div>
+
+      <div class="progress-block">
+        <div class="progress-header">
+          <span class="progress-label">Прогресс</span>
+          <span class="progress-pct" id="progressPct">0%</span>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill" id="progressFill"></div>
+        </div>
+      </div>
+
+      <div style="font-size:10px;color:var(--text-dim);letter-spacing:.08em;text-transform:uppercase;margin-bottom:10px;">
+        Лог выполнения
+      </div>
+      <div class="log-block" id="logBlock">
+        <div class="log-entry">Ожидание запуска...</div>
+      </div>
+    </div>
+
+    <!-- Results panel -->
+    <div class="results-panel" id="resultsPanel">
+      <div class="results-header">
+        <div class="results-title">Результаты извлечения</div>
+        <div class="stat-pill good">
+          <span class="num" id="statFound">0</span>
+          <span style="color:var(--text-muted)">найдено</span>
+        </div>
+        <div class="stat-pill warn">
+          <span class="num" id="statEmpty">0</span>
+          <span style="color:var(--text-muted)">пусто</span>
+        </div>
+        <div class="stat-pill">
+          <span style="color:var(--text-muted);font-size:12px" id="statTime">—</span>
+        </div>
+        <button class="btn-new" id="btnNew">↩ Новый</button>
+        <a class="btn-download" id="btnDownload" href="#" download>
+          ⬇ Скачать XLSX
+        </a>
+      </div>
+
+      <div class="filter-bar">
+        <input class="search-input" type="text" id="searchInput" placeholder="🔍  Поиск по параметру...">
+        <div class="filter-btns">
+          <button class="filter-btn active" data-filter="all">Все</button>
+          <button class="filter-btn" data-filter="found">Найдено</button>
+          <button class="filter-btn" data-filter="empty">Пусто</button>
+        </div>
+        <span class="results-count" id="resultsCount"></span>
+      </div>
+
+      <div class="table-wrap">
+        <table id="resultsTable">
+          <thead>
+            <tr>
+              <th>№</th>
+              <th>Параметр</th>
+              <th>Категория</th>
+              <th>Ед. изм.</th>
+              <th>Значение</th>
+            </tr>
+          </thead>
+          <tbody id="resultsBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<!-- ================================================================
+     JavaScript
+================================================================ -->
+<script>
+// ── State ──────────────────────────────────────────────────────────
+const state = {
+  pdfFile: null,
+  xlsxFile: null,
+  jobId: null,
+  ws: null,
+  results: [],
+  filter: 'all',
+  defaultPrompt: '',
+};
+
+// ── DOM refs ───────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const pdfInput    = $('pdfInput');
+const xlsxInput   = $('xlsxInput');
+const btnRun      = $('btnRun');
+const btnRunLabel = $('btnRunLabel');
+const btnRunIcon  = $('btnRunIcon');
+const emptyState  = $('emptyState');
+const processingPanel = $('processingPanel');
+const resultsPanel = $('resultsPanel');
+const progressFill = $('progressFill');
+const progressPct  = $('progressPct');
+const logBlock     = $('logBlock');
+const resultsBody  = $('resultsBody');
+const searchInput  = $('searchInput');
+const promptTA     = $('promptTextarea');
+
+// ── Init ───────────────────────────────────────────────────────────
+async function init() {
+  // Load default prompt
+  try {
+    const r = await fetch('/api/prompt');
+    const d = await r.json();
+    state.defaultPrompt = d.prompt;
+    promptTA.value = d.prompt;
+    // Show model name
+    const modelMatch = d.prompt.includes('gemini') ? 'Gemini Flash' : 'AI Model';
+    const resp2 = await fetch('/api/prompt'); // just reuse
+  } catch(e) { console.warn('Could not load prompt', e); }
+
+  setupDropZone('pdfZone', pdfInput, 'pdf');
+  setupDropZone('xlsxZone', xlsxInput, 'xlsx');
+  pdfInput.onchange  = e => setFile('pdf', e.target.files[0]);
+  xlsxInput.onchange = e => setFile('xlsx', e.target.files[0]);
+  $('pdfRemove').onclick  = () => clearFile('pdf');
+  $('xlsxRemove').onclick = () => clearFile('xlsx');
+  btnRun.onclick = handleRun;
+  $('btnNew').onclick = resetToStart;
+  $('btnResetPrompt').onclick = () => { promptTA.value = state.defaultPrompt; };
+  $('advancedToggle').onclick = toggleAdvanced;
+  searchInput.oninput = renderTable;
+  document.querySelectorAll('.filter-btn').forEach(b => {
+    b.onclick = () => {
+      state.filter = b.dataset.filter;
+      document.querySelectorAll('.filter-btn').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      renderTable();
+    };
+  });
+  $('btnDownload').onclick = e => {
+    if (!state.jobId) { e.preventDefault(); return; }
+    $('btnDownload').href = `/api/download/${state.jobId}`;
+  };
+}
+
+// ── Advanced toggle ────────────────────────────────────────────────
+function toggleAdvanced() {
+  const body = $('advancedBody');
+  const arrow = $('toggleArrow');
+  body.classList.toggle('open');
+  arrow.classList.toggle('open');
+}
+
+// ── File handling ──────────────────────────────────────────────────
+function setupDropZone(zoneId, inputEl, type) {
+  const zone = $(zoneId);
+  zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+  zone.addEventListener('drop', e => {
+    e.preventDefault();
+    zone.classList.remove('drag-over');
+    const file = e.dataTransfer.files[0];
+    if (file) setFile(type, file);
+  });
+}
+
+function setFile(type, file) {
+  if (!file) return;
+  state[type + 'File'] = file;
+  const badgeEl  = $(type + 'Badge');
+  const nameEl   = $(type + 'BadgeName');
+  const sizeEl   = $(type + 'BadgeSize');
+  nameEl.textContent = file.name;
+  sizeEl.textContent = formatBytes(file.size);
+  badgeEl.classList.add('visible');
+  updateRunBtn();
+}
+
+function clearFile(type) {
+  state[type + 'File'] = null;
+  $(type + 'Badge').classList.remove('visible');
+  $(type + 'Input').value = '';
+  updateRunBtn();
+}
+
+function formatBytes(b) {
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
+  return (b/1048576).toFixed(1) + ' MB';
+}
+
+function updateRunBtn() {
+  const ready = state.pdfFile && state.xlsxFile;
+  btnRun.disabled = !ready;
+  btnRunLabel.textContent = ready ? 'Запустить анализ' : 'Загрузите файлы';
+}
+
+// ── Run pipeline ───────────────────────────────────────────────────
+async function handleRun() {
+  if (!state.pdfFile || !state.xlsxFile) return;
+
+  btnRun.disabled = true;
+  btnRunIcon.innerHTML = '<span class="spinner"></span>';
+  btnRunLabel.textContent = 'Загружаем файлы...';
+
+  // Show processing panel
+  emptyState.classList.add('hidden');
+  processingPanel.classList.add('visible');
+  resultsPanel.classList.remove('visible');
+  logBlock.innerHTML = '';
+  updateProgress(0);
+
+  try {
+    // Step 1: Upload files
+    const form = new FormData();
+    form.append('pdf', state.pdfFile);
+    form.append('xlsx', state.xlsxFile);
+    const upRes = await fetch('/api/upload', { method: 'POST', body: form });
+    if (!upRes.ok) throw new Error('Ошибка загрузки файлов');
+    const upData = await upRes.json();
+    state.jobId = upData.job_id;
+
+    $('processMetaText').textContent = `${upData.pdf_name}  ·  ${upData.xlsx_name}`;
+    btnRunLabel.textContent = 'Анализируем...';
+
+    // Step 2: Connect WebSocket
+    await connectWebSocket(state.jobId);
+
+    // Step 3: Start processing (with optional custom prompt)
+    const customPrompt = promptTA.value !== state.defaultPrompt ? promptTA.value : null;
+    const startRes = await fetch(`/api/process/${state.jobId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ custom_prompt: customPrompt }),
+    });
+    if (!startRes.ok) throw new Error('Ошибка запуска обработки');
+
+  } catch(err) {
+    showToast('❌ ' + err.message, 'error');
+    resetRunBtn();
+  }
+}
+
+// ── WebSocket ──────────────────────────────────────────────────────
+function connectWebSocket(jobId) {
+  return new Promise((resolve, reject) => {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const url = `${proto}://${location.host}/api/ws/${jobId}`;
+    console.log('[WS] Connecting to', url);
+
+    let opened = false;
+    const ws = new WebSocket(url);
+    state.ws = ws;
+
+    // Таймаут подключения — 10 секунд
+    const connTimeout = setTimeout(() => {
+      if (!opened) {
+        ws.close();
+        reject(new Error('WebSocket: таймаут подключения (10с)'));
+      }
+    }, 10000);
+
+    ws.onopen = () => {
+      opened = true;
+      clearTimeout(connTimeout);
+      console.log('[WS] Connected');
+      resolve();
+    };
+
+    // onerror НЕ реджектит промис если соединение уже открыто
+    ws.onerror = (evt) => {
+      console.error('[WS] Error event', evt);
+      if (!opened) {
+        clearTimeout(connTimeout);
+        reject(new Error('WebSocket: не удалось подключиться к серверу'));
+      }
+    };
+
+    ws.onclose = (evt) => {
+      console.log('[WS] Closed, code=', evt.code, 'reason=', evt.reason);
+      if (!opened) {
+        clearTimeout(connTimeout);
+        reject(new Error(`WebSocket закрыт до открытия (code=${evt.code})`));
+      }
+    };
+
+    ws.onmessage = ({ data }) => {
+      let msg;
+      try { msg = JSON.parse(data); }
+      catch(e) { console.warn('[WS] bad JSON:', data); return; }
+
+      console.log('[WS] msg:', msg.type, msg.progress ?? '');
+
+      if (msg.type === 'ping') return;
+      if (msg.type === 'log') {
+        appendLog(msg.message);
+        updateProgress(msg.progress || 0);
+      } else if (msg.type === 'status') {
+        const d = msg.data;
+        if (d.log) d.log.forEach(m => appendLog(m));
+        if (d.progress !== undefined) updateProgress(d.progress);
+      } else if (msg.type === 'done') {
+        onDone(msg.data);
+      } else if (msg.type === 'error') {
+        onError(msg.message);
+      }
+    };
+  });
+}
+
+function appendLog(msg) {
+  const div = document.createElement('div');
+  div.className = 'log-entry new';
+  div.textContent = msg;
+  logBlock.appendChild(div);
+  logBlock.scrollTop = logBlock.scrollHeight;
+  setTimeout(() => div.classList.remove('new'), 400);
+}
+
+function updateProgress(pct) {
+  progressFill.style.width = pct + '%';
+  progressPct.textContent = pct + '%';
+}
+
+// ── Done ───────────────────────────────────────────────────────────
+function onDone(data) {
+  updateProgress(100);
+  state.results = data.results || [];
+
+  setTimeout(() => {
+    processingPanel.classList.remove('visible');
+    resultsPanel.classList.add('visible');
+
+    $('statFound').textContent = data.found || 0;
+    $('statEmpty').textContent = (data.total || 0) - (data.found || 0);
+    $('statTime').textContent  = `⏱ ${data.elapsed || 0}с`;
+    $('btnDownload').href = `/api/download/${state.jobId}`;
+
+    renderTable();
+    showToast(`✅ Готово! Найдено ${data.found}/${data.total} параметров`, 'success');
+  }, 600);
+
+  resetRunBtn(true);
+}
+
+function onError(msg) {
+  appendLog(msg);
+  showToast(msg, 'error');
+  resetRunBtn();
+}
+
+function resetRunBtn(success = false) {
+  btnRunIcon.textContent = success ? '✓' : '▶';
+  btnRunLabel.textContent = success ? 'Готово' : 'Повторить';
+  btnRun.disabled = false;
+}
+
+// ── Results table ──────────────────────────────────────────────────
+function renderTable() {
+  const query  = searchInput.value.toLowerCase().trim();
+  const filter = state.filter;
+
+  let rows = state.results.filter(r => {
+    const hasVal = r.value !== null && r.value !== '';
+    if (filter === 'found' && !hasVal) return false;
+    if (filter === 'empty' && hasVal)  return false;
+    if (query) {
+      const haystack = (r.name + ' ' + r.type + ' ' + (r.value || '')).toLowerCase();
+      if (!haystack.includes(query)) return false;
+    }
+    return true;
+  });
+
+  $('resultsCount').textContent = `${rows.length} из ${state.results.length}`;
+
+  resultsBody.innerHTML = rows.map(r => {
+    const hasVal = r.value !== null && r.value !== '';
+    const cls = hasVal ? 'row-found' : 'row-empty';
+    const dotCls = hasVal ? 'found' : 'empty';
+    const valDisplay = hasVal
+      ? `<div class="value-badge"><span class="status-dot ${dotCls}"></span><span class="cell-value has-value">${esc(r.value)}</span></div>`
+      : `<div class="value-badge"><span class="status-dot ${dotCls}"></span><span class="cell-value no-value">не найдено</span></div>`;
+    return `<tr class="${cls}">
+      <td class="cell-num">${esc(r.number || r.id)}</td>
+      <td class="cell-name">${esc(r.name)}</td>
+      <td class="cell-type">${esc(r.type || '')}</td>
+      <td class="cell-units">${esc(r.units || '')}</td>
+      <td>${valDisplay}</td>
+    </tr>`;
+  }).join('');
+}
+
+function esc(s) {
+  if (s == null) return '';
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Reset ──────────────────────────────────────────────────────────
+function resetToStart() {
+  clearFile('pdf'); clearFile('xlsx');
+  state.jobId = null; state.results = [];
+  emptyState.classList.remove('hidden');
+  processingPanel.classList.remove('visible');
+  resultsPanel.classList.remove('visible');
+  logBlock.innerHTML = '';
+  updateProgress(0);
+  btnRunIcon.textContent = '▶';
+  btnRunLabel.textContent = 'Загрузите файлы';
+  btnRun.disabled = true;
+}
+
+// ── Toast ──────────────────────────────────────────────────────────
+let toastTimer;
+function showToast(msg, type = '') {
+  const t = $('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (type ? ' ' + type : '');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 4000);
+}
+
+// ── Start ──────────────────────────────────────────────────────────
+init();
+</script>
+</body>
+</html>

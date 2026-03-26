@@ -1,0 +1,41 @@
+# Виртуальное окружение
+.venv/
+venv/
+env/
+
+# Секреты — никогда не коммитить
+.env
+
+# Временные задания и загруженные файлы
+jobs/
+
+# Кеш Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+
+# Логи сервера
+*.log
+server_err.log
+
+# Данные (PDF презентации и Excel с данными — не коммитить)
+*.pdf
+*.xlsx
+*.xls
+
+# Результаты парсинга
+*_output_*.xlsx
+
+# IDE / OS
+.idea/
+.vscode/
+*.DS_Store
+Thumbs.db
+desktop.ini
+
+# Pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
