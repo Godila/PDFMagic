@@ -289,6 +289,28 @@ body::before {
 .process-title { font-size: 18px; font-weight: 600; }
 .process-meta { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
 
+/* ── Cancel button ── */
+.btn-cancel {
+  display: flex; align-items: center; gap: 7px;
+  background: none;
+  border: 1.5px solid var(--border2);
+  color: var(--text-muted);
+  border-radius: var(--radius); padding: 8px 16px;
+  font-family: 'Onest', sans-serif; font-size: 12px; font-weight: 500;
+  cursor: pointer; transition: var(--transition);
+  white-space: nowrap;
+}
+.btn-cancel:hover:not(:disabled) {
+  border-color: var(--red); color: var(--red);
+  background: var(--red-bg);
+}
+.btn-cancel:disabled { opacity: .35; cursor: not-allowed; }
+.btn-cancel.cancelling {
+  border-color: var(--yellow); color: var(--yellow);
+  pointer-events: none;
+}
+.btn-cancel .cancel-icon { font-size: 14px; }
+
 /* ── Progress ── */
 .progress-block { margin-bottom: 28px; }
 .progress-header {
@@ -589,6 +611,10 @@ tbody td:last-child { padding-right: 32px; }
           <div class="process-title">Анализ документа</div>
           <div class="process-meta" id="processMetaText">Инициализация...</div>
         </div>
+        <button class="btn-cancel" id="btnCancel" title="Остановить обработку">
+          <span class="cancel-icon">⛔</span>
+          <span id="btnCancelLabel">Отменить</span>
+        </button>
       </div>
 
       <div class="progress-block">
@@ -715,6 +741,7 @@ async function init() {
   $('xlsxRemove').onclick = () => clearFile('xlsx');
   btnRun.onclick = handleRun;
   $('btnNew').onclick = resetToStart;
+  $('btnCancel').onclick = handleCancel;
   $('btnResetPrompt').onclick = () => { promptTA.value = state.defaultPrompt; };
   $('advancedToggle').onclick = toggleAdvanced;
   searchInput.oninput = renderTable;
@@ -811,6 +838,11 @@ async function handleRun() {
 
     $('processMetaText').textContent = `${upData.pdf_name}  ·  ${upData.xlsx_name}`;
     btnRunLabel.textContent = 'Анализируем...';
+    // Активируем кнопку отмены
+    const cancelBtn = $('btnCancel');
+    cancelBtn.disabled = false;
+    cancelBtn.classList.remove('cancelling');
+    $('btnCancelLabel').textContent = 'Отменить';
 
     // Step 2: Connect WebSocket
     await connectWebSocket(state.jobId);
@@ -890,6 +922,8 @@ function connectWebSocket(jobId) {
         if (d.progress !== undefined) updateProgress(d.progress);
       } else if (msg.type === 'done') {
         onDone(msg.data);
+      } else if (msg.type === 'cancelled') {
+        onCancelled(msg.message);
       } else if (msg.type === 'error') {
         onError(msg.message);
       }
@@ -912,6 +946,48 @@ function updateProgress(pct) {
 }
 
 // ── Done ───────────────────────────────────────────────────────────
+// ── Cancel ─────────────────────────────────────────────────────────
+async function handleCancel() {
+  if (!state.jobId) return;
+  const btn = $('btnCancel');
+  btn.classList.add('cancelling');
+  $('btnCancelLabel').textContent = 'Отменяем...';
+  btn.disabled = true;
+
+  try {
+    const r = await fetch(`/api/cancel/${state.jobId}`, { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok) {
+      showToast('⚠️ ' + (d.error || 'Не удалось отменить'), 'error');
+      btn.classList.remove('cancelling');
+      $('btnCancelLabel').textContent = 'Отменить';
+      btn.disabled = false;
+    }
+    // Дальнейшую обработку делает WS-сообщение 'cancelled'
+  } catch(e) {
+    showToast('❌ Ошибка отмены: ' + e.message, 'error');
+    btn.classList.remove('cancelling');
+    $('btnCancelLabel').textContent = 'Отменить';
+    btn.disabled = false;
+  }
+}
+
+function onCancelled(message) {
+  appendLog(message || '⛔ Обработка отменена');
+  updateProgress(0);
+  // Сбрасываем прогресс-бар плавно
+  progressFill.style.background = 'var(--red)';
+  setTimeout(() => { progressFill.style.background = ''; }, 1500);
+
+  const btn = $('btnCancel');
+  btn.classList.remove('cancelling');
+  btn.disabled = true;
+  $('btnCancelLabel').textContent = 'Отменено';
+
+  showToast('⛔ Анализ остановлен', '');
+  resetRunBtn();
+}
+
 function onDone(data) {
   updateProgress(100);
   state.results = data.results || [];
@@ -942,6 +1018,8 @@ function resetRunBtn(success = false) {
   btnRunIcon.textContent = success ? '✓' : '▶';
   btnRunLabel.textContent = success ? 'Готово' : 'Повторить';
   btnRun.disabled = false;
+  // Деактивируем кнопку отмены после завершения/ошибки
+  $('btnCancel').disabled = true;
 }
 
 // ── Results table ──────────────────────────────────────────────────

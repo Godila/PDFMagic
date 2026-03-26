@@ -53,6 +53,9 @@ JOBS_DIR.mkdir(exist_ok=True)
 # Хранилище активных WebSocket соединений и очередей прогресса
 _ws_queues: dict[str, asyncio.Queue] = {}
 
+# Хранилище активных asyncio-задач (для отмены)
+_running_tasks: dict[str, asyncio.Task] = {}
+
 # ---------------------------------------------------------------------------
 # Хелперы
 # ---------------------------------------------------------------------------
@@ -139,9 +142,30 @@ async def start_process(job_id: str, req: ProcessRequest = Body(default=ProcessR
     if job_id not in _ws_queues:
         _ws_queues[job_id] = asyncio.Queue()
 
-    # Запускаем фоновую задачу
-    asyncio.create_task(_run_pipeline(job_id))
+    # Запускаем фоновую задачу и сохраняем ссылку для отмены
+    task = asyncio.create_task(_run_pipeline(job_id))
+    _running_tasks[job_id] = task
     return {"status": "started"}
+
+
+@app.post("/api/cancel/{job_id}")
+async def cancel_process(job_id: str):
+    """Отменяет выполняющееся задание."""
+    status = _job_status(job_id)
+    if not status:
+        return JSONResponse({"error": "job not found"}, status_code=404)
+    if status.get("state") != "running":
+        return JSONResponse({"error": "job is not running"}, status_code=400)
+
+    task = _running_tasks.get(job_id)
+    if task and not task.done():
+        task.cancel()
+        return {"status": "cancelling"}
+
+    # Задача уже завершилась сама — просто обновляем статус
+    status.update({"state": "cancelled", "progress": 0})
+    _save_status(job_id, status)
+    return {"status": "cancelled"}
 
 
 @app.websocket("/api/ws/{job_id}")
@@ -165,7 +189,7 @@ async def websocket_progress(ws: WebSocket, job_id: str):
             try:
                 msg = await asyncio.wait_for(q.get(), timeout=30.0)
                 await ws.send_json(msg)
-                if msg.get("type") == "done" or msg.get("type") == "error":
+                if msg.get("type") in ("done", "error", "cancelled"):
                     break
             except asyncio.TimeoutError:
                 # Ping чтобы держать соединение живым
@@ -225,6 +249,7 @@ async def _run_pipeline(job_id: str):
         status["started_at"] = time.time()
         _save_status(job_id, status)
         await _push(job_id, {"type": "status", "data": status})
+        await asyncio.sleep(0)  # первая точка отмены — сразу после старта
 
         api_key = os.environ.get("OPENROUTER_API_KEY", "")
         model = os.environ.get("OPENROUTER_MODEL", "google/gemini-3-flash-preview")
@@ -317,6 +342,12 @@ async def _run_pipeline(job_id: str):
         await log(f"🎉 Готово! Найдено {found}/{len(parameters)} параметров за {elapsed:.0f} сек.", progress=100)
         await _push(job_id, {"type": "done", "data": status})
 
+    except asyncio.CancelledError:
+        status = _job_status(job_id)
+        status.update({"state": "cancelled", "progress": 0})
+        _save_status(job_id, status)
+        await _push(job_id, {"type": "cancelled", "message": "⛔ Обработка отменена пользователем"})
+
     except Exception as e:
         tb = traceback.format_exc()
         error_msg = f"❌ Ошибка: {str(e)}"
@@ -324,6 +355,10 @@ async def _run_pipeline(job_id: str):
         status.update({"state": "error", "error": str(e), "traceback": tb})
         _save_status(job_id, status)
         await _push(job_id, {"type": "error", "message": error_msg, "traceback": tb})
+
+    finally:
+        # Всегда убираем задачу из реестра после завершения/отмены/ошибки
+        _running_tasks.pop(job_id, None)
 
 
 # ---------------------------------------------------------------------------
